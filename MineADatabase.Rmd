@@ -1,0 +1,1279 @@
+---
+title: "Practicum2"
+authors: "Shichang Ye, Tong Cui, Lin Han, Kan Zhou"
+output:
+  html_document:
+    df_print: paged
+---
+
+<img src="C:\Practicum2\ERD\erd-1-1.jpeg"/>
+<img src="C:\Practicum2\ERD\erd-1.jpeg"/>
+## Note: originally, we had a junction table article_author to reflect the relationship between an article and an author. But as we proceed we realize that in our design we only care about the names of the authors, so we decided  to put all the authors of an article as a text, with a ‘;' as the separator.We later can conveniently just split the text and retrieve every author for data consumption.
+<img src="C:\Practicum2\ERD\erd-2.jpeg"/>
+<img src="C:\Practicum2\ERD\erd-3.jpeg"/>
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, eval=TRUE, warning = FALSE, message = FALSE)
+```
+
+## ****************Connect to database*******************
+```{r}
+library(DBI)
+library(sqldf)
+dbcon <- dbConnect(odbc::odbc(),
+                .connection_string = "Driver={MySQL ODBC 8.0 Unicode Driver};", 
+                Server = "localhost", Database = "practicum2", Uid = "root", PWD = 123456,
+                Port = 3306)
+```
+
+
+## *******************Part 1 Load XML*********************
+```{r}
+library(XML)
+path <- "C:/Practicum2"
+filename <- "pubmed_sample.xml"
+fpn = paste(path, filename,sep = "/")
+
+xmlDom <- xmlParse(fpn)
+xmlRoot <- xmlRoot(xmlDom)
+
+# Get number of articles
+numOfArticles <- xmlSize(xmlRoot)
+```
+
+
+## ******1.1 Create empty data frames*********
+```{r}
+# Create data frame for pubmed_article
+pubmed_article.df <- data.frame(pa_id = vector(mode = "integer", length = numOfArticles),
+                             medline_citation = vector(mode = "integer", length = numOfArticles),
+                             pubmed_data = vector(mode = "integer", length = numOfArticles),
+                             stringsAsFactors = F)
+
+# Create data frame for medline_citation
+medline_citation.df <- data.frame(pmid = vector(mode = "integer", length = numOfArticles),
+                               owner = vector(mode = "character", length = numOfArticles),
+                               status = vector(mode = "character", length = numOfArticles),
+                               date_created = vector(mode = "character", length = numOfArticles),
+                               date_completed = vector(mode = "character", length = numOfArticles),
+                               article = vector(mode = "integer", length = numOfArticles),
+                               stringsAsFactors = F
+                               )
+
+# Create data frame for article
+article.df <- data.frame(article_id = vector(mode = "integer", length = numOfArticles),
+                      pub_model = vector(mode = "integer", length = numOfArticles),
+                      journal = vector(mode = "integer", length = numOfArticles),
+                      article_title = vector(mode = "character", length = numOfArticles),
+                      pagination = vector(mode = "character", length = numOfArticles),
+                      e_location = vector(mode = "integer", length = numOfArticles),
+                      author_list = vector(mode = "character", length = numOfArticles),
+                      language = vector(mode = "character", length = numOfArticles),
+                      publication_type_list = vector(mode = "character", length = numOfArticles),
+                      stringsAsFactors = F)
+
+# Create data frame for pub_model
+pub_model.df <- data.frame(pub_model_id = integer(),
+                        model = character(),
+                        stringsAsFactors = F)
+
+# Create data frame for journal
+journal.df <- data.frame(journal_id = integer(),
+                         issn = character(),
+                         issn_type = character(),
+                         journal_issue = integer(),
+                         title = character(),
+                         stringsAsFactors = F)
+
+# Create data frame for journal_issue
+journal_issue.df <- data.frame(ji_id = integer(),
+                      volume = character(),
+                      issue = character(),
+                      pub_date = integer(),
+                      stringsAsFactors = F)
+
+# Create data frame for e_location
+e_location.df <- data.frame(e_location_id = integer(),
+                         location_type = character(),
+                         valid = character(),
+                         location_info = character(),
+                         stringsAsFactors = F)
+
+# Create data frame for pubmed_data
+pubmed_data.df <- data.frame(pd_id = vector(mode = "integer", length = numOfArticles),
+                          history = vector(mode = "integer", length = numOfArticles),
+                          publication_status = vector(mode = "character", length = numOfArticles),
+                          stringsAsFactors = F)
+
+# Create data frame for history
+history.df <- data.frame(history_id = vector(mode = "integer", length = numOfArticles),
+                         received = vector(mode = "character", length = numOfArticles),
+                         accepted = vector(mode = "character", length = numOfArticles),
+                         epublish = vector(mode = "character", length = numOfArticles),
+                         entrez = vector(mode = "character", length = numOfArticles),
+                         pubmed = vector(mode = "character", length = numOfArticles),
+                         medline = vector(mode = "character", length = numOfArticles),
+                         revised = vector(mode = "character", length = numOfArticles),
+                         aheadofprint = vector(mode = "character", length = numOfArticles),
+                         stringsAsFactors = F)
+
+# Create data frame for date
+date_time.df <- data.frame(date_id = integer(),
+                      date_info = character(),
+                      stringsAsFactors = F)
+```
+
+
+```{r}
+# Parse a date node[1]
+parseDate <- function (aDateNode) 
+{
+  date_str <- ""
+  year <- ""
+  month <- ""
+  day <- ""
+  # Indicates a <MedlineDate> tag
+  if(xmlSize(aDateNode) == 1){
+    year <- substring(xmlValue(aDateNode[[1]]), 1, 4)
+    month <- substring(xmlValue(aDateNode[[1]]), 6, 8)
+  } else if (xmlSize(aDateNode) == 2) {
+    year <- as.character(xmlValue(aDateNode[[1]]))
+    month <- as.character(xmlValue(aDateNode[[2]]))
+  } else if (xmlSize(aDateNode) == 3 || xmlSize(aDateNode) == 5) {
+    year <- as.character(xmlValue(aDateNode[[1]]))
+    month <- as.character(xmlValue(aDateNode[[2]]))
+    day <- as.character(xmlValue(aDateNode[[3]]))
+  }
+
+  if (toupper(month) == "JAN") {
+    month = "1"
+  } else if (toupper(month) == "FEB") {
+    month = "2"
+  }else if (toupper(month) == "MAR") {
+    month = "3"
+  }else if (toupper(month) == "APR") {
+    month = "4"
+  }else if (toupper(month) == "MAY") {
+    month = "5"
+  }else if (toupper(month) == "JUN") {
+    month = "6"
+  }else if (toupper(month) == "JUL") {
+    month = "7"
+  }else if (toupper(month) == "AUG") {
+    month = "8"
+  }else if (toupper(month) == "SEP") {
+    month = "9"
+  }else if (toupper(month) == "OCT") {
+    month = "10"
+  }else if (toupper(month) == "NOV") {
+    month = "11"
+  }else if (toupper(month) == "DEC") {
+    month = "12"
+  }
+  
+  if (nchar(month) == 1) {
+    month <- paste("0", month, sep = "")
+  }
+  if (day != "" && nchar(day) == 1) {
+    day <- paste("0", day, sep = "")
+  }
+  
+  if (day != "") {
+    date_str <- paste(year, month, day, sep = "")
+  } else {
+    date_str <- paste(year, month, sep = "")
+  }
+  
+  return (date_str)
+}
+```
+
+
+## ***********1.2 Parse xml and populate data frames************
+```{r}
+for (i in 1:numOfArticles)
+{
+  # get current pubmed_article, medline_citation and pubmed_data nodes
+  cur_pubmed_article <- xmlRoot[[i]]
+  cur_medline_citation <- cur_pubmed_article[[1]]
+  cur_pubmed_data <- cur_pubmed_article[[2]]
+  
+  # article
+  cur_article <- xmlElementsByTagName(cur_medline_citation, "Article", recursive = FALSE)[[1]]
+  
+  # -- article_id
+  
+  article.df$article_id[i] = i
+  # -- pub_model
+  cur_pub_model <- xmlGetAttr(cur_article, "PubModel")
+
+  find_pub_model <- 0
+  if (nrow(pub_model.df) == 0){
+    pub_model.df[1,] <- c(1, cur_pub_model)
+    find_pub_model <- 1
+  } else {
+    find_pub_model <- which(pub_model.df$model == cur_pub_model)
+    if (identical(find_pub_model, integer(0))){# not found
+      pub_model.df[nrow(pub_model.df) + 1, ] <- c(nrow(pub_model.df) + 1, cur_pub_model)
+      find_pub_model = nrow(pub_model.df)
+    }
+  }
+  article.df$pub_model[i] <- find_pub_model
+
+  # -- journal
+  cur_journal <- xmlElementsByTagName(cur_article, "Journal", recursive = FALSE)[[1]]
+  cur_issn_tag <- xmlElementsByTagName(cur_journal, "ISSN", recursive = FALSE)[[1]]
+  cur_issn_type <- xmlGetAttr(cur_issn_tag, "IssnType")
+  cur_issn <- xmlValue(cur_issn_tag)
+  cur_title <- xmlValue(xmlElementsByTagName(cur_journal, "Title", recursive = FALSE)[[1]])
+  
+  # ---- journal_issue
+  cur_journal_issue <- xmlElementsByTagName(cur_journal, "JournalIssue", recursive = FALSE)[[1]]
+  cur_volume <- xmlValue(xmlElementsByTagName(cur_journal_issue, "Volume", recursive = FALSE)[[1]])
+  cur_issue <- xmlValue(xmlElementsByTagName(cur_journal_issue, "Issue", recursive = FALSE)[[1]])
+  cur_pub_date <- parseDate(xmlElementsByTagName(cur_journal_issue, "PubDate", recursive = FALSE)[[1]])
+  
+  find_date <- 0
+  if (nrow(date_time.df) == 0) {# empty dataframe
+    date_time.df[1,] <- c(1, cur_pub_date)
+    find_date <- 1
+  } else {
+      find_date <- which(date_time.df$date_info == cur_pub_date)
+      if (identical(find_date, integer(0))){# not found
+        date_time.df[nrow(date_time.df) + 1, ] <- c(nrow(date_time.df) + 1, cur_pub_date)
+        find_date <- nrow(date_time.df)
+      }
+  }
+
+  find_cur_journal_issue <- 0
+  if (nrow(journal_issue.df) == 0) {# empty dataframe
+    journal_issue.df[1,] <- c(1, cur_volume, cur_issue, find_date)
+    find_cur_journal_issue <- 1
+  } else {
+    find_cur_journal_issue <- which(journal_issue.df$volume == cur_volume 
+                                    & journal_issue.df$issue == cur_issue 
+                                    & journal_issue.df$pub_date == find_date)
+    if (identical(find_cur_journal_issue, integer(0))) {# not found
+      journal_issue.df[nrow(journal_issue.df) + 1, ] <- c(nrow(journal_issue.df) + 1, cur_volume, cur_issue, find_date)
+      find_cur_journal_issue <- nrow(journal_issue.df)
+    }
+  }
+  
+  find_journal <- 0
+  if (nrow(journal.df) == 0) {# empty dataframe
+    journal.df[1,] <- c(1, cur_issn, cur_issn_type, find_cur_journal_issue, cur_title)
+    find_journal <- 1
+  } else {
+    find_journal <- which(journal.df$issn == cur_issn
+                          & journal.df$journal_issue == find_cur_journal_issue)
+    if (identical(find_journal, integer(0))) {# not found
+      journal.df[nrow(journal.df) + 1, ] <- c(nrow(journal.df) + 1, cur_issn, cur_issn_type, find_cur_journal_issue, cur_title)
+      find_journal <- nrow(journal.df)
+    } else {# found, change index to issn
+      find_journal <- journal.df$issn[find_journal]
+    }
+  }
+  article.df$journal[i] <- find_journal
+
+  # -- article_title
+  cur_article_title <- xmlValue(xmlElementsByTagName(cur_article, "ArticleTitle", recursive = FALSE)[[1]])
+  article.df$article_title[i] <- cur_article_title
+  
+  # -- pagination
+  cur_pagination <- xmlValue(xmlElementsByTagName(cur_article, "Pagination", recursive = FALSE)[[1]])
+  article.df$pagination[i] <- cur_pagination
+  
+  # -- e_location
+  cur_e_location <- xmlElementsByTagName(cur_article, "ELocationID", recursive = FALSE)[[1]]
+
+  cur_location_type <- xmlGetAttr(cur_e_location, "EIdType")
+  cur_valid <- xmlGetAttr(cur_e_location, "ValidYN")
+  cur_location_info <- xmlValue(cur_e_location)
+  e_location.df[i,] <- c(i, cur_location_type, cur_valid, cur_location_info)
+  article.df$e_location[i] <- i
+  
+  # -- author_list
+  cur_author_list_tag <- xmlElementsByTagName(cur_article, "AuthorList", recursive = FALSE)[[1]]
+  cur_authors = ""
+  number_of_authors <- xmlSize(cur_author_list_tag)
+
+  for (j in 1:number_of_authors) {
+    cur_author_tag <- cur_author_list_tag[[j]]
+    cur_author_fore_name <- xmlValue(xmlElementsByTagName(cur_author_tag, "ForeName", recursive = FALSE)[[1]])
+    cur_author_last_name <- xmlValue(xmlElementsByTagName(cur_author_tag, "LastName", recursive = FALSE)[[1]])
+    cur_author_full_name <- paste(cur_author_fore_name, cur_author_last_name, sep = " ")
+    if (j == 1) {
+      cur_authors = paste(cur_authors, cur_author_full_name, sep = "")
+    } else {
+      cur_authors = paste(cur_authors, cur_author_full_name, sep = ";")
+    }
+  }
+  article.df$author_list[i] <- cur_authors
+ 
+  # -- language
+  cur_language <- xmlValue(xmlElementsByTagName(cur_article, "Language", recursive = FALSE)[[1]])
+  article.df$language <- cur_language
+
+  # -- publication_type_list
+  cur_publication_type_list_tag <- xmlElementsByTagName(cur_article, "PublicationTypeList", recursive = FALSE)[[1]]
+
+  cur_publication_types = ""
+  number_of_publication_types <- xmlSize(cur_publication_type_list_tag)
+
+  for (j in 1:number_of_publication_types) {
+    cur_publication_type_tag <- cur_publication_type_list_tag[[j]]
+    cur_publication_type <- xmlValue(cur_publication_type_tag)
+
+    if (j == 1) {
+      cur_publication_types = paste(cur_publication_types, cur_publication_type, sep = "")
+    } else {
+      cur_publication_types = paste(cur_publication_types, cur_publication_type, sep = ";")
+    }
+  }
+  article.df$publication_type_list[i] <- cur_publication_types
+  
+  # medline_citation
+  
+  # -- pmid
+  cur_pmid <- xmlValue(xmlElementsByTagName(cur_medline_citation, "PMID", recursive = FALSE)[[1]])
+  medline_citation.df$pmid[i] <- cur_pmid
+  
+  # -- owner
+  cur_owner <- xmlGetAttr(cur_medline_citation, "Owner")
+  medline_citation.df$owner <- cur_owner
+  
+  # -- status
+  cur_status <- xmlGetAttr(cur_medline_citation, "Status")
+  medline_citation.df$status <- cur_status
+  
+  # -- date_created
+  cur_date_created <- parseDate(xmlElementsByTagName(cur_medline_citation, "DateCreated", recursive = FALSE)[[1]])
+  
+  find_date <- 0
+  if (nrow(date_time.df) == 0) {# empty dataframe
+    date_time.df[1,] <- c(1, cur_date_created)
+    find_date <- 1
+  } else {
+      find_date <- which(date_time.df$date_info == cur_date_created)
+      if (identical(find_date, integer(0))){# not found
+        date_time.df[nrow(date_time.df) + 1, ] <- c(nrow(date_time.df) + 1, cur_date_created)
+        find_date <- nrow(date_time.df)
+      }
+  }
+  
+  medline_citation.df$date_created[i] <- find_date
+  
+  # -- date_completed
+  cur_date_completed <- parseDate(xmlElementsByTagName(cur_medline_citation, "DateCompleted", recursive = FALSE)[[1]])
+  
+  find_date <- 0
+  if (nrow(date_time.df) == 0) {# empty dataframe
+    date_time.df[1,] <- c(1, cur_date_completed)
+    find_date <- 1
+  } else {
+      find_date <- which(date_time.df$date_info == cur_date_completed)
+      if (identical(find_date, integer(0))){# not found
+        date_time.df[nrow(date_time.df) + 1, ] <- c(nrow(date_time.df) + 1, cur_date_completed)
+        find_date <- nrow(date_time.df)
+      }
+  }
+  
+  medline_citation.df$date_completed[i] <- find_date
+  
+  # -- article
+  medline_citation.df$article[i] <- i
+  
+  # pubmed_data
+  
+  # -- pd_id
+  pubmed_data.df$pd_id[i] <- i
+  
+  # -- history
+  pubmed_data.df$history[i] <- i
+  history.df$history_id[i] <- i
+
+  cur_history_tag <- xmlElementsByTagName(cur_pubmed_data, "History", recursive = FALSE)[[1]]
+
+  number_of_history_dates <- xmlSize(cur_history_tag)
+
+  for (j in 1:number_of_history_dates) {
+    cur_history_date_tag <- cur_history_tag[[j]]
+    cur_history_date_attr <- xmlGetAttr(cur_history_date_tag, "PubStatus")
+    cur_history_date <- parseDate(cur_history_date_tag)
+    
+    find_date <- 0
+    if (nrow(date_time.df) == 0) {# empty dataframe
+      date_time.df[1,] <- c(1, cur_history_date)
+      find_date <- 1
+    } else {
+        find_date <- which(date_time.df$date_info == cur_history_date)
+        if (identical(find_date, integer(0))){# not found
+          date_time.df[nrow(date_time.df) + 1, ] <- c(nrow(date_time.df) + 1, cur_history_date)
+          find_date <- nrow(date_time.df)
+        }
+    }
+    
+    if (cur_history_date_attr == "received") {
+      history.df$received[i] <- find_date
+    } else if (cur_history_date_attr == "accepted") {
+      history.df$accepted[i] <- find_date
+    }else if (cur_history_date_attr == "epublish") {
+      history.df$epublish[i] <- find_date
+    }else if (cur_history_date_attr == "entrez") {
+      history.df$entrez[i] <- find_date
+    }else if (cur_history_date_attr == "pubmed") {
+      history.df$pubmed[i] <- find_date
+    }else if (cur_history_date_attr == "medline") {
+      history.df$medline[i] <- find_date
+    }else if (cur_history_date_attr == "revised") {
+      history.df$revised[i] <- find_date
+    }else if (cur_history_date_attr == "aheadofprint") {
+      history.df$aheadofprint[i] <- find_date
+    }
+  }
+
+  # -- publication_status
+  cur_publication_status <- xmlValue(xmlElementsByTagName(cur_pubmed_data, "PublicationStatus", recursive = FALSE)[[1]])
+  pubmed_data.df$publication_status[i] <- cur_publication_status
+  
+  # pubmed_article
+  pubmed_article.df$pa_id[i] <- i
+  pubmed_article.df$medline_citation[i] <- cur_pmid
+  pubmed_article.df$pubmed_data[i] <- i
+  
+  
+  # clean garbage
+  if (i %% 5 == 0) {
+    rm(cur_pubmed_article)
+    rm(cur_medline_citation)
+    rm(cur_pubmed_data)
+    rm(cur_article)
+    rm(cur_journal)
+    rm(cur_issn_tag)
+    rm(cur_issn_type)
+    rm(cur_issn)
+    rm(cur_title)
+    rm(cur_journal_issue)
+    rm(cur_volume)
+    rm(cur_issue)
+    rm(cur_pub_date)
+    gc()
+  }
+}
+```
+
+
+## *********1.3 Create and populate tables************
+```{sql connection=dbcon}
+DROP TABLE IF EXISTS pubmed_article
+```
+
+```{sql connection=dbcon}
+DROP TABLE IF EXISTS pubmed_data
+```
+
+```{sql connection=dbcon}
+DROP TABLE IF EXISTS history
+```
+
+```{sql connection=dbcon}
+DROP TABLE IF EXISTS medline_citation
+```
+
+```{sql connection=dbcon}
+DROP TABLE IF EXISTS article
+```
+
+```{sql connection=dbcon}
+DROP TABLE IF EXISTS e_location
+```
+
+```{sql connection=dbcon}
+DROP TABLE IF EXISTS journal
+```
+
+```{sql connection=dbcon}
+DROP TABLE IF EXISTS journal_issue
+```
+
+```{sql connection=dbcon}
+DROP TABLE IF EXISTS date_time
+```
+
+```{sql connection=dbcon}
+DROP TABLE IF EXISTS pub_model
+```
+
+
+```{sql connection=dbcon}
+CREATE TABLE IF NOT EXISTS pub_model(
+  pub_model_id INTEGER AUTO_INCREMENT NOT NULL,
+  model VARCHAR(100) NOT NULL,
+  PRIMARY KEY (pub_model_id)
+)
+```
+
+```{sql connection=dbcon}
+CREATE TABLE IF NOT EXISTS date_time (
+  date_id INTEGER AUTO_INCREMENT NOT NULL,
+  date_info VARCHAR(50) NOT NULL,
+  PRIMARY KEY (date_id)
+)
+```
+
+```{sql connection=dbcon}
+CREATE TABLE IF NOT EXISTS journal_issue (
+  ji_id INTEGER AUTO_INCREMENT NOT NULL,
+  volume INTEGER,
+  issue INTEGER,
+  pub_date INTEGER,
+  PRIMARY KEY (ji_id),
+  FOREIGN KEY (pub_date) 
+    REFERENCES date_time(date_id)
+    ON UPDATE CASCADE ON DELETE RESTRICT
+)
+```
+
+```{sql connection=dbcon}
+CREATE TABLE IF NOT EXISTS journal (
+  journal_id INTEGER AUTO_INCREMENT NOT NULL,
+  issn VARCHAR(50) NOT NULL,
+  issn_type VARCHAR(100) NOT NULL,
+  journal_issue INTEGER NOT NULL,
+  title VARCHAR(250) NOT NULL,
+  PRIMARY KEY (journal_id),
+  FOREIGN KEY (journal_issue) 
+    REFERENCES journal_issue(ji_id)
+    ON UPDATE CASCADE ON DELETE RESTRICT
+)
+```
+
+```{sql connection=dbcon}
+CREATE TABLE IF NOT EXISTS e_location (
+  e_location_id INTEGER AUTO_INCREMENT NOT NULL,
+  location_type VARCHAR(100) NOT NULL,
+  valid VARCHAR(10) NOT NULL,
+  location_info VARCHAR(100),
+  PRIMARY KEY (e_location_id)
+)
+```
+
+```{sql connection=dbcon}
+CREATE TABLE IF NOT EXISTS article(
+  article_id INTEGER AUTO_INCREMENT NOT NULL,
+  pub_model INTEGER NOT NULL,
+  journal INTEGER NOT NULL,
+  article_title VARCHAR(250) NOT NULL, 
+  pagination VARCHAR(20) NOT NULL,
+  e_location INTEGER NOT NULL,
+  author_list VARCHAR(250) NOT NULL,
+  language VARCHAR(20) NOT NULL,
+  publication_type_list VARCHAR(250) NOT NULL,
+  PRIMARY KEY (article_id),
+  FOREIGN KEY (pub_model) 
+    REFERENCES pub_model(pub_model_id)
+    ON UPDATE CASCADE ON DELETE RESTRICT,
+  FOREIGN KEY (journal) 
+    REFERENCES journal(journal_id)
+    ON UPDATE CASCADE ON DELETE RESTRICT,
+  FOREIGN KEY (e_location) 
+    REFERENCES e_location(e_location_id)
+    ON UPDATE CASCADE ON DELETE RESTRICT
+)
+```
+
+```{sql connection=dbcon}
+CREATE TABLE IF NOT EXISTS medline_citation (
+  pmid INTEGER AUTO_INCREMENT NOT NULL,
+  owner VARCHAR(100) NOT NULL,
+  status VARCHAR(100) NOT NULL,
+  date_created INTEGER NOT NULL,
+  date_completed INTEGER NOT NULL,
+  article INTEGER NOT NULL,
+  PRIMARY KEY (pmid),
+  FOREIGN KEY (date_created) 
+    REFERENCES date_time(date_id)
+    ON UPDATE CASCADE ON DELETE RESTRICT,
+  FOREIGN KEY (date_completed) 
+    REFERENCES date_time(date_id)
+    ON UPDATE CASCADE ON DELETE RESTRICT,
+  FOREIGN KEY (article) 
+    REFERENCES article(article_id)
+    ON UPDATE CASCADE ON DELETE RESTRICT
+)
+```
+
+```{sql connection=dbcon}
+CREATE TABLE IF NOT EXISTS history (
+  history_id INTEGER AUTO_INCREMENT NOT NULL,
+  received INTEGER,
+  accepted INTEGER,
+  epublish INTEGER,
+  entrez INTEGER,
+  pubmed INTEGER,
+  medline INTEGER,
+  revised INTEGER,
+  aheadofprint INTEGER,
+  PRIMARY KEY (history_id),
+  FOREIGN KEY (received) 
+    REFERENCES date_time(date_id)
+    ON UPDATE CASCADE ON DELETE RESTRICT,
+  FOREIGN KEY (accepted) 
+    REFERENCES date_time(date_id)
+    ON UPDATE CASCADE ON DELETE RESTRICT,
+  FOREIGN KEY (epublish) 
+    REFERENCES date_time(date_id)
+    ON UPDATE CASCADE ON DELETE RESTRICT,
+  FOREIGN KEY (entrez) 
+    REFERENCES date_time(date_id)
+    ON UPDATE CASCADE ON DELETE RESTRICT,
+  FOREIGN KEY (pubmed) 
+    REFERENCES date_time(date_id)
+    ON UPDATE CASCADE ON DELETE RESTRICT,
+  FOREIGN KEY (medline) 
+    REFERENCES date_time(date_id)
+    ON UPDATE CASCADE ON DELETE RESTRICT,
+  FOREIGN KEY (revised) 
+    REFERENCES date_time(date_id)
+    ON UPDATE CASCADE ON DELETE RESTRICT,
+  FOREIGN KEY (aheadofprint) 
+    REFERENCES date_time(date_id)
+    ON UPDATE CASCADE ON DELETE RESTRICT
+)
+```
+
+```{sql connection=dbcon}
+CREATE TABLE IF NOT EXISTS pubmed_data (
+  pd_id INTEGER AUTO_INCREMENT NOT NULL,
+  history INTEGER NOT NULL,
+  publication_status VARCHAR(100),
+  PRIMARY KEY (pd_id),
+  FOREIGN KEY (history) 
+    REFERENCES history(history_id)
+    ON UPDATE CASCADE ON DELETE RESTRICT
+)
+```
+
+```{sql connection=dbcon}
+CREATE TABLE IF NOT EXISTS pubmed_article (
+  pa_id INTEGER AUTO_INCREMENT NOT NULL,
+  medline_citation INTEGER NOT NULL,
+  pubmed_data INTEGER NOT NULL,
+  PRIMARY KEY (pa_id),
+  FOREIGN KEY (medline_citation) 
+    REFERENCES medline_citation(pmid)
+    ON UPDATE CASCADE ON DELETE RESTRICT,
+  FOREIGN KEY (pubmed_data) 
+    REFERENCES pubmed_data(pd_id)
+    ON UPDATE CASCADE ON DELETE RESTRICT
+)
+```
+
+
+## ***********1.4 Write data to tables*************
+```{r}
+history.df[history.df == ""] <- NA
+
+dbWriteTable(dbcon, "pub_model", pub_model.df, append = T)
+dbWriteTable(dbcon, "date_time", date_time.df, append = T)
+dbWriteTable(dbcon, "journal_issue", journal_issue.df, append = T)
+dbWriteTable(dbcon, "journal", journal.df, append = T)
+dbWriteTable(dbcon, "e_location", e_location.df, append = T)
+dbWriteTable(dbcon, "article", article.df, append = T)
+dbWriteTable(dbcon, "medline_citation", medline_citation.df, append = T)
+dbWriteTable(dbcon, "history", history.df, append = T)
+dbWriteTable(dbcon, "pubmed_data", pubmed_data.df, append = T)
+dbWriteTable(dbcon, "pubmed_article", pubmed_article.df, append = T)
+```
+
+
+## *************Part 2 Create Star/Snowflake Schema***************
+
+## ***********2.1 Create and populate tables***********
+```{sql connection=dbcon}
+DROP TABLE IF EXISTS fact_summary
+```
+
+```{sql connection=dbcon}
+DROP TABLE IF EXISTS fact_article
+```
+
+```{sql connection=dbcon}
+DROP TABLE IF EXISTS dim_authors
+```
+
+```{sql connection=dbcon}
+DROP TABLE IF EXISTS dim_journal
+```
+
+```{sql connection=dbcon}
+DROP TABLE IF EXISTS dim_history
+```
+
+## Create tables
+```{sql connection=dbcon}
+CREATE TABLE IF NOT EXISTS dim_authors (
+  authors_id INTEGER PRIMARY KEY AUTO_INCREMENT NOT NULL,
+  authors_names VARCHAR(250) NOT NULL
+)
+```
+
+```{sql connection=dbcon}
+CREATE TABLE IF NOT EXISTS dim_journal (
+  journal_id INTEGER PRIMARY KEY AUTO_INCREMENT NOT NULL,
+  issn VARCHAR(50) NOT NULL,
+  issn_type VARCHAR(100) NOT NULL,
+  journal_title VARCHAR(250) NOT NULL,
+  volume INTEGER NOT NULL,
+  issue INTEGER NOT NULL,
+  pub_date VARCHAR(50) NOT NULL
+)
+```
+
+```{sql connection=dbcon}
+CREATE TABLE dim_history (
+  history_id INTEGER PRIMARY KEY AUTO_INCREMENT NOT NULL,
+  received VARCHAR(50) DEFAULT NULL,
+  accepted VARCHAR(50) DEFAULT NULL,
+  epublish VARCHAR(50) DEFAULT NULL,
+  entrez VARCHAR(50),
+  pubmed VARCHAR(50),
+  medline VARCHAR(50),
+  revised VARCHAR(50) DEFAULT NULL,
+  aheadofprint VARCHAR(50) DEFAULT NULL
+)
+```
+
+```{sql connection=dbcon}
+CREATE TABLE fact_article (
+  fact_article_id INTEGER PRIMARY KEY AUTO_INCREMENT NOT NULL,
+  authors_id INTEGER NOT NULL,
+  history_id INTEGER NOT NULL,
+  journal_id INTEGER NOT NULL,
+  article_title VARCHAR(250) NOT NULL,
+  language VARCHAR(20) NOT NULL,
+  publication_types VARCHAR(250) NOT NULL,
+  FOREIGN KEY (authors_id)
+    REFERENCES dim_authors(authors_id)
+    ON UPDATE CASCADE ON DELETE RESTRICT,
+  FOREIGN KEY (history_id)
+    REFERENCES dim_history(history_id)
+    ON UPDATE CASCADE ON DELETE RESTRICT,
+  FOREIGN KEY (journal_id)
+    REFERENCES dim_journal(journal_id)
+    ON UPDATE CASCADE ON DELETE RESTRICT
+)
+```
+
+## Insert values into tables
+```{sql connection=dbcon}
+INSERT INTO dim_authors (authors_names)
+SELECT author_list AS authors_names FROM article;
+```
+
+```{sql connection=dbcon}
+INSERT INTO dim_journal (journal_id, issn, issn_type, journal_title, volume, issue, pub_date)
+SELECT journal.journal_id AS journal_id,
+        journal.issn AS issn,
+        journal.issn_type AS issn_type,
+        journal.title AS journal_title,
+        journal_issue.volume AS volume,
+        journal_issue.issue AS issue,
+        date_time.date_info AS pub_date
+FROM journal
+LEFT JOIN journal_issue ON journal_issue.ji_id = journal.journal_issue
+LEFT JOIN date_time ON date_time.date_id = journal_issue.pub_date;
+```
+
+```{sql connection=dbcon}
+INSERT INTO dim_history
+SELECT history_id,
+        received_date.date_info AS received,
+        accepted_date.date_info AS accepted,
+        epublish_date.date_info AS epublish,
+        entrez_date.date_info AS entrez,
+        pubmed_date.date_info AS pubmed,
+        medline_date.date_info AS medline,
+        revised_date.date_info AS revised,
+        aheadofprint_date.date_info AS aheadofprint
+FROM history
+LEFT JOIN date_time AS received_date ON history.received = received_date.date_id
+LEFT JOIN date_time AS accepted_date ON history.accepted = accepted_date.date_id
+LEFT JOIN date_time AS epublish_date ON history.epublish = epublish_date.date_id
+LEFT JOIN date_time AS entrez_date ON history.entrez = entrez_date.date_id
+LEFT JOIN date_time AS pubmed_date ON history.pubmed = pubmed_date.date_id
+LEFT JOIN date_time AS medline_date ON history.medline = medline_date.date_id
+LEFT JOIN date_time AS revised_date ON history.revised = revised_date.date_id
+LEFT JOIN date_time AS aheadofprint_date ON history.aheadofprint = aheadofprint_date.date_id;
+```
+
+```{sql connection=dbcon}
+INSERT INTO fact_article (fact_article_id, authors_id, history_id, journal_id, article_title, language, publication_types)
+SELECT DISTINCT article.article_id AS fact_article_id,
+       dim_authors.authors_id AS authors_id,
+       dim_history.history_id AS history_id,
+       dim_journal.journal_id AS journal_id,
+       article.article_title AS article_title,
+       article.language AS language,
+       article.publication_type_list AS publication_types
+FROM article
+INNER JOIN dim_authors
+INNER JOIN dim_history
+INNER JOIN dim_journal
+INNER JOIN history
+INNER JOIN pubmed_data
+INNER JOIN pubmed_article
+INNER JOIN medline_citation
+ON article.journal = dim_journal.journal_id
+AND dim_history.history_id = pubmed_data.history
+AND pubmed_data.pd_id = pubmed_article.pubmed_data
+AND pubmed_article.medline_citation = medline_citation.pmid
+AND medline_citation.article = article.article_id
+AND dim_authors.authors_names = article.author_list;
+```
+
+## ****2.2 Create and populate a complete summary fact table****
+
+### Explanation:
+### This is a complete summary table that allows users to check almost everything about the number of articles published, quarter, year, author, and journal title.
+### The patterns are as follows:
+### fs_id  year  quarter  author  journal_title  number_of_articles
+###  √      x      x        √          x                 √         number of articless published by the author
+###  √      √      x        √          x                 √         number of articless published by the author in the year
+###  √      √      √        √          x                 √         number of articless published by the author in the year and the quarter
+
+###  √      x      x        x          √                 √         number of articless published by the journal
+###  √      √      x        x          √                 √         number of articless published by the journal in the year
+###  √      √      √        x          √                 √         number of articless published by the journal in the year and the quarter
+
+###  √      √      x        x          x                 √         number of articless published in the year
+###  √      x      √        x          x                 √         number of articless published in the quarter
+###  √      √      √        x          x                 √         number of articless published in the year and quarter
+
+### Note:
+###     1. Year and quarter info comes from "PubDate" tag, which is the actual publication date of the article.
+###     2. The idea for this table is not possible without the useful advice from Dr. Jack Thomas.
+```{sql connection=dbcon}
+CREATE TABLE IF NOT EXISTS fact_summary (
+  fs_id INTEGER PRIMARY KEY AUTO_INCREMENT NOT NULL,
+  year VARCHAR(10),
+  quarter VARCHAR(10),
+  author VARCHAR(100),
+  journal_title VARCHAR(200),
+  number_of_articles INTEGER NOT NULL
+)
+```
+
+```{r}
+dim_authors_df <- dbReadTable(dbcon, "dim_authors")
+dim_journal_df <- dbReadTable(dbcon, "dim_journal")
+fact_article_df <- dbReadTable(dbcon, "fact_article")
+
+number_of_fact_articles <- sqldf("SELECT COUNT(*) FROM fact_article_df")
+i <- 1
+while (i <= number_of_fact_articles) {
+  cur_row <- fact_article_df[i,]
+  authors_id <- cur_row$authors_id
+  journal_id <- cur_row$journal_id
+
+  get_journal_title <- dbGetQuery(
+    dbcon,
+    "SELECT journal_title FROM dim_journal WHERE journal_id = ? LIMIT 1",
+    params = list(journal_id)
+  )
+  journal_title <- get_journal_title[1,1]
+  
+  authors <- dbGetQuery(
+    dbcon,
+    "SELECT authors_names FROM dim_authors WHERE authors_id = ? LIMIT 1",
+    params = list(authors_id)
+  )
+  
+  authors_list <- strsplit(authors[1,1], split=";")[[1]]
+  article_pub_date <- dbGetQuery(
+    dbcon,
+    "SELECT pub_date FROM dim_journal WHERE journal_id = ? LIMIT 1",
+    params = list(journal_id)
+  )
+  
+  pub_year <- substring(article_pub_date, 1, 4)
+  
+  pub_month <- ""
+  pub_quarter <- ""
+  # if article_pub_date contains month info
+  if (nchar(article_pub_date) >= 6) {
+    pub_month <- as.numeric(substring(article_pub_date, 5, 6))
+    if (pub_month <= 3) {
+      pub_quarter <- "1"
+    } else if (pub_month <= 6) {
+      pub_quarter <- "2"
+    } else if (pub_month <= 9) {
+      pub_quarter <- "3"
+    } else if (pub_month <= 12) {
+      pub_quarter <- "4"
+    }
+  }
+
+  # update (journal_title - number_of_articles) in fact_summary table
+  get_fsid_with_matching_journal_title <- dbGetQuery(dbcon,
+                                              "SELECT fs_id FROM fact_summary 
+                                              WHERE journal_title = ? AND year IS NULL AND quarter IS NULL AND author IS NULL
+                                              LIMIT 1",
+                                              params = list(journal_title))
+
+  if (nrow(get_fsid_with_matching_journal_title) == 0) {# cannot find matching journal title
+      statement = "INSERT INTO fact_summary(number_of_articles,quarter,year,author,journal_title) VALUES (?,NULL,NULL,NULL,?)"
+      dbSendStatement(
+        dbcon,
+        statement,
+        params = list(1, journal_title)
+        )
+  } else {
+      statement = "UPDATE fact_summary SET number_of_articles = number_of_articles + 1 WHERE fs_id = ?"
+      dbSendStatement(
+        dbcon,
+        statement,
+        params = list(get_fsid_with_matching_journal_title[1,1])
+        )
+  }
+
+  # update (journal_title - year - number_of_articles) in fact_summary table
+  get_fsid_with_matching_year_journal_title <- dbGetQuery(dbcon,
+                                          "SELECT fs_id FROM fact_summary 
+                                          WHERE journal_title = ? AND year = ? AND quarter IS NULL AND author IS NULL
+                                          LIMIT 1",
+                                          params = list(journal_title, pub_year))
+
+  if (nrow(get_fsid_with_matching_year_journal_title) == 0) {# cannot find matching year and journal title
+  statement = "INSERT INTO fact_summary(number_of_articles,quarter,year,author,journal_title) VALUES (?,NULL,?,NULL,?)"
+  dbSendStatement(
+    dbcon,
+    statement,
+    params = list(1, pub_year, journal_title)
+    )
+  } else {
+      statement = "UPDATE fact_summary SET number_of_articles = number_of_articles + 1 WHERE fs_id = ?"
+      dbSendStatement(
+        dbcon,
+        statement,
+        params = list(get_fsid_with_matching_year_journal_title[1,1])
+        )
+  }
+
+  # update (year - quarter - journal_title - number_of_articles) in fact_summary table
+  if (pub_quarter != "") {
+    get_fsid_with_matching_year_quarter_journal_title <- dbGetQuery(dbcon,
+                                      "SELECT fs_id FROM fact_summary 
+                                      WHERE journal_title = ? AND year = ? AND quarter = ? AND author IS NULL
+                                      LIMIT 1",
+                                      params = list(journal_title, pub_year, pub_quarter))
+  }
+  
+  if (nrow(get_fsid_with_matching_year_quarter_journal_title) == 0) {# cannot find matching year, quarter and journal title
+  statement = "INSERT INTO fact_summary(number_of_articles,quarter,year,author,journal_title) VALUES (?,?,?,NULL,?)"
+  dbSendStatement(
+    dbcon,
+    statement,
+    params = list(1, pub_quarter, pub_year, journal_title)
+    )
+  } else {
+      statement = "UPDATE fact_summary SET number_of_articles = number_of_articles + 1 WHERE fs_id = ?"
+      dbSendStatement(
+        dbcon,
+        statement,
+        params = list(get_fsid_with_matching_year_quarter_journal_title[1,1])
+        )
+  }
+  
+  # update (year - number_of_articles) in fact_summary table
+  get_fsid_with_matching_year <- dbGetQuery(dbcon,
+                                            "SELECT fs_id FROM fact_summary 
+                                            WHERE year = ? AND quarter IS NULL AND author IS NULL AND journal_title IS NULL
+                                            LIMIT 1",
+                                            params = list(pub_year))
+
+  if (nrow(get_fsid_with_matching_year) == 0) {# cannot find matching year
+      statement = "INSERT INTO fact_summary(number_of_articles,quarter,year,author,journal_title) VALUES (?,NULL,?,NULL,NULL)"
+      dbSendStatement(
+        dbcon,
+        statement,
+        params = list(1, pub_year)
+        )
+  } else {
+      statement = "UPDATE fact_summary SET number_of_articles = number_of_articles + 1 WHERE fs_id = ?"
+      dbSendStatement(
+        dbcon,
+        statement,
+        params = list(get_fsid_with_matching_year[1,1])
+        )
+  }
+  
+  # update (quarter - number_of_articles) in fact_summary table
+  if (pub_quarter != "") {
+    get_fsid_with_matching_quarter <- dbGetQuery(dbcon,
+                                              "SELECT fs_id FROM fact_summary 
+                                              WHERE year IS NULL AND quarter = ? AND author IS NULL AND journal_title IS NULL
+                                              LIMIT 1",
+                                              params = list(pub_quarter))
+  
+    if (nrow(get_fsid_with_matching_quarter) == 0) {# cannot find matching quarter
+        statement = "INSERT INTO fact_summary(number_of_articles,quarter,year,author,journal_title) VALUES (?,?,NULL,NULL,NULL)"
+        dbSendStatement(
+          dbcon,
+          statement,
+          params = list(1, pub_quarter)
+          )
+    } else {
+        statement = "UPDATE fact_summary SET number_of_articles = number_of_articles + 1 WHERE fs_id = ?"
+        dbSendStatement(
+          dbcon,
+          statement,
+          params = list(get_fsid_with_matching_quarter[1,1])
+          )
+    }
+  }
+  
+  # update (year - quarter - number_of_articles) in fact_summary table
+  if (pub_quarter != "") {
+    get_fsid_with_matching_year_quarter <- dbGetQuery(dbcon,
+                                              "SELECT fs_id FROM fact_summary 
+                                              WHERE year = ? AND quarter = ? AND author IS NULL AND journal_title IS NULL
+                                              LIMIT 1",
+                                              params = list(pub_year, pub_quarter))
+
+    if (nrow(get_fsid_with_matching_year_quarter) == 0) {# cannot find matching year and quarter
+        statement = "INSERT INTO fact_summary(number_of_articles,quarter,year,author,journal_title) VALUES (?,?,?,NULL,NULL)"
+        dbSendStatement(
+          dbcon,
+          statement,
+          params = list(1, pub_quarter, pub_year)
+          )
+    } else {
+        statement = "UPDATE fact_summary SET number_of_articles = number_of_articles + 1 WHERE fs_id = ?"
+        dbSendStatement(
+          dbcon,
+          statement,
+          params = list(get_fsid_with_matching_year_quarter[1,1])
+          )
+    }
+  }
+
+  j <- 1
+  number_of_authors <- length(authors_list)
+  while (j <= number_of_authors) {
+    cur_author <- authors_list[j]
+    
+    # update (author - number_of_articles) in fact_summary table
+    get_fsid_with_matching_author <- dbGetQuery(dbcon,
+                                                "SELECT fs_id FROM fact_summary 
+                                                WHERE author = ? AND year IS NULL AND quarter IS NULL AND journal_title IS NULL
+                                                LIMIT 1",
+                                                params = list(cur_author))
+
+    if (nrow(get_fsid_with_matching_author) == 0) {# cannot find matching author
+        statement = "INSERT INTO fact_summary(number_of_articles,quarter,year,author,journal_title) VALUES (?,NULL,NULL,?,NULL)"
+        dbSendStatement(
+          dbcon,
+          statement,
+          params = list(1, cur_author)
+          )
+    } else {
+        statement = "UPDATE fact_summary SET number_of_articles = number_of_articles + 1 WHERE fs_id = ?"
+        dbSendStatement(
+          dbcon,
+          statement,
+          params = list(get_fsid_with_matching_author[1,1])
+          )
+    }
+    
+    # update (year - author - number_of_articles) in fact_summary table
+    get_fsid_with_matching_year_author <- dbGetQuery(dbcon,
+                                            "SELECT fs_id FROM fact_summary 
+                                            WHERE author = ? AND year = ? AND quarter IS NULL AND journal_title IS NULL
+                                            LIMIT 1",
+                                            params = list(cur_author, pub_year))
+
+    if (nrow(get_fsid_with_matching_year_author) == 0) {# cannot find matching year and author
+    statement = "INSERT INTO fact_summary(number_of_articles,quarter,year,author,journal_title) VALUES (?,NULL,?,?,NULL)"
+    dbSendStatement(
+      dbcon,
+      statement,
+      params = list(1, pub_year, cur_author)
+      )
+    } else {
+        statement = "UPDATE fact_summary SET number_of_articles = number_of_articles + 1 WHERE fs_id = ?"
+        dbSendStatement(
+          dbcon,
+          statement,
+          params = list(get_fsid_with_matching_year_author[1,1])
+          )
+    }
+
+    # update (year - quarter - author - number_of_articles) in fact_summary table
+    if (pub_quarter != "") {
+      get_fsid_with_matching_year_quarter_author <- dbGetQuery(dbcon,
+                                        "SELECT fs_id FROM fact_summary 
+                                        WHERE author = ? AND year = ? AND quarter = ? AND journal_title IS NULL
+                                        LIMIT 1",
+                                        params = list(cur_author, pub_year, pub_quarter))
+    }
+
+    if (nrow(get_fsid_with_matching_year_quarter_author) == 0) {# cannot find matching year, quarter and author
+    statement = "INSERT INTO fact_summary(number_of_articles,quarter,year,author,journal_title) VALUES (?,?,?,?,NULL)"
+    dbSendStatement(
+      dbcon,
+      statement,
+      params = list(1, pub_quarter, pub_year, cur_author)
+      )
+    } else {
+        statement = "UPDATE fact_summary SET number_of_articles = number_of_articles + 1 WHERE fs_id = ?"
+        dbSendStatement(
+          dbcon,
+          statement,
+          params = list(get_fsid_with_matching_year_quarter_author[1,1])
+          )
+    }
+
+    j <- j + 1
+  }
+  
+  i <- i + 1
+  
+  # clean garbage
+  if (i %% 5 == 0) {
+    rm(cur_row)
+    gc()
+  }
+}
+```
+
+```{sql connection=dbcon}
+SELECT * FROM fact_summary;
+```
+·
+
+## ****************Part 3 Explore and Mine Data******************
+## graph for query1: how many articles all journals has published by quarter
+```{r}
+df <- dbGetQuery(dbcon, "SELECT COUNT(*) AS number_article, quarter(pubmed) AS quarter
+FROM fact_article
+JOIN dim_history ON fact_article.history_id = dim_history.history_id
+GROUP BY quarter
+ORDER BY quarter ASC;")
+
+barplot(c(5, 2, 4, 8),
+        names.arg = c("1", "2", "3", "4"),
+        xlab="Quarter",
+        ylab="Number of Articles",
+        main="Number of Publications by All Journals by Quarter",
+        col = "orange")
+```
+
+## graph for query2: how many articles all journals has published by year
+```{r}
+df <- dbGetQuery(dbcon, "SELECT year(pubmed) AS year, COUNT(*) AS number_article
+FROM fact_article
+JOIN dim_history ON fact_article.history_id = dim_history.history_id
+GROUP BY year
+ORDER BY year ASC;")
+
+barplot(c(7, 11, 1),
+        xlab="Year",
+        ylab="Number of Articles",
+        names.arg = c("2011", "2012", "2013"),
+        main="Number of Publications by All Journals by Year",
+        col = "orange")
+```
+
+## graph for query3: top 3 authors with most publications
+```{r}
+df <- dbGetQuery(dbcon, "SELECT number_of_articles, author
+FROM fact_summary
+WHERE year IS NULL AND quarter IS NULL AND journal_title IS NULL
+ORDER BY number_of_articles DESC
+LIMIT 3;")
+
+author1 <- df$author[1]
+author2 <- df$author[2]
+author3 <- df$author[3]
+authors <- c(author1, author2, author3)
+
+barplot(t(as.matrix(df$number_of_articles)),
+        xlab="Authors",
+        ylab="Number of Articles",
+        ylim=c(0,20),
+        names.arg = authors,
+        main="Top 3 authors with most publications",
+        col = "orange")
+```
+
+## query4: the average number of months between submission and publication.
+```{sql connection=dbcon}
+   SELECT  
+    AVG((SUBSTRING(j.pub_date, 1, 4) - SUBSTRING(h.received, 1, 4)) * 12 + SUBSTRING(j.pub_date, 5, 2) - SUBSTRING(h.received, 5, 2) + 1) as average_months
+   FROM dim_history AS h
+   JOIN fact_article AS f ON f.fact_article_id = h.history_id
+   JOIN dim_journal AS j ON j.journal_id = f.journal_id;
+```
+
+## query5: number of quarterly publications from 2012 ~ 2013
+```{sql connection=dbcon}
+DROP TABLE IF EXISTS author_temp;
+```
+
+```{sql connection=dbcon}
+CREATE TABLE author_temp
+   SELECT SUBSTRING_INDEX(a.authors_names, ';', -1) AS name, a.authors_id AS ids, j.journal_title AS title, 
+    SUBSTRING(j.pub_date,1, 4) + 0 AS year, SUBSTRING(j.pub_date,5, 2) + 0 AS quarter
+   FROM dim_authors a
+   JOIN fact_article e 
+   JOIN dim_journal j
+   ON a.authors_id = e.authors_id AND j.journal_id = e.journal_id;
+```
+
+```{sql connection=dbcon}
+UPDATE author_temp 
+SET quarter = 1 
+WHERE quarter <=3 ;
+```
+
+```{sql connection=dbcon}
+UPDATE author_temp 
+SET quarter = 2 
+WHERE quarter >= 4 
+AND quarter <= 6;
+```
+
+```{sql connection=dbcon}
+UPDATE author_temp 
+SET quarter = 3
+WHERE quarter >= 7 
+AND quarter <= 9;
+```
+
+```{sql connection=dbcon}
+UPDATE author_temp 
+SET quarter = 4 
+WHERE quarter >= 10 
+AND quarter <= 12;
+```
+
+```{sql connection=dbcon}
+  SELECT DISTINCT year, quarter, GROUP_CONCAT(name) as name, GROUP_CONCAT(title) as title, COUNT(title) AS number_of_articles
+  FROM author_temp
+  group by year, quarter;
+```
+
+```{r}
+year_quarter <- c(5,4,4,3,3)
+colours = c("blue","red")
+barplot(year_quarter, names.arg = c('2012.1', '2012.2','2012.3','2012.4','2013.1'), main="Number of Publications from 2012 ~ 2013", ylab = "Number of articles", xlab="Year and Quarter", col = colours)
+```
+
+## *********************Disconnect database***********************
+```{r}
+dbDisconnect(dbcon)
+```
+
+## References
+### [1] Jack Thomas. CS5200 Database Management Systems, Module: XML stores & XPath. 2022 Fall.
