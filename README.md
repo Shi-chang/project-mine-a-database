@@ -13,7 +13,7 @@ Write queries on data warehouse to analyze the patterns of the publications, and
 4. Completed a query on the summary fact table to analyze the top authors having the most publications.
 
 # Project ERD
-![erd-1-1](https://user-images.githubusercontent.com/76865032/213975491-15e798ab-c32b-49a3-bd9b-2378515542e2.jpeg)
+![erd-1](https://user-images.githubusercontent.com/76865032/213976050-16504490-9e37-4475-afdf-ece30de7961d.jpeg)
 
 ![erd-2](https://user-images.githubusercontent.com/76865032/213975913-7bc23165-1c92-4e9b-98ff-80b9eb9d95a4.jpeg)
 
